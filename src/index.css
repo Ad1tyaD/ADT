@@ -1,0 +1,143 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(51, 85, 255, 0.5);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(51, 85, 255, 0.8);
+}
+
+/* Base styles */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-midnight-950 text-gray-100 font-sans antialiased;
+  background-image: 
+    radial-gradient(ellipse at top, rgba(51, 85, 255, 0.1) 0%, transparent 50%),
+    radial-gradient(ellipse at bottom, rgba(15, 23, 42, 1) 0%, rgba(15, 23, 42, 1) 100%);
+  min-height: 100vh;
+}
+
+/* Gradient text utility */
+.gradient-text {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-400 to-emerald-400;
+}
+
+/* Glass morphism cards */
+.glass-card {
+  @apply bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl shadow-xl;
+}
+
+.glass-card-hover {
+  @apply glass-card transition-all duration-300 hover:bg-white/10 hover:border-white/20 hover:shadow-2xl;
+}
+
+/* Status badges */
+.status-badge {
+  @apply px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide;
+}
+
+.status-bullish {
+  @apply bg-profit/20 text-profit-light border border-profit/30;
+}
+
+.status-bearish {
+  @apply bg-loss/20 text-loss-light border border-loss/30;
+}
+
+.status-neutral {
+  @apply bg-neutral/20 text-neutral-light border border-neutral/30;
+}
+
+/* Alert zones */
+.zone-green {
+  @apply bg-gradient-to-r from-profit/20 to-profit/5 border-l-4 border-profit;
+}
+
+.zone-yellow {
+  @apply bg-gradient-to-r from-warning/20 to-warning/5 border-l-4 border-warning;
+}
+
+.zone-red {
+  @apply bg-gradient-to-r from-loss/20 to-loss/5 border-l-4 border-loss;
+}
+
+/* Input styling */
+input, textarea, select {
+  @apply bg-midnight-950/50 border border-white/10 rounded-lg px-4 py-3 text-gray-100 
+         placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-midnight-500/50 
+         focus:border-midnight-500 transition-all duration-200;
+}
+
+/* Button variants */
+.btn-primary {
+  @apply bg-gradient-to-r from-midnight-600 to-midnight-500 hover:from-midnight-500 hover:to-midnight-400
+         text-white font-semibold px-6 py-3 rounded-xl shadow-lg shadow-midnight-500/25
+         transition-all duration-300 hover:shadow-xl hover:shadow-midnight-500/40
+         active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-success {
+  @apply bg-gradient-to-r from-profit-dark to-profit hover:from-profit hover:to-profit-light
+         text-white font-semibold px-6 py-3 rounded-xl shadow-lg shadow-profit/25
+         transition-all duration-300 hover:shadow-xl hover:shadow-profit/40
+         active:scale-95;
+}
+
+.btn-danger {
+  @apply bg-gradient-to-r from-loss-dark to-loss hover:from-loss hover:to-loss-light
+         text-white font-semibold px-6 py-3 rounded-xl shadow-lg shadow-loss/25
+         transition-all duration-300 hover:shadow-xl hover:shadow-loss/40
+         active:scale-95;
+}
+
+.btn-ghost {
+  @apply bg-transparent border border-white/20 hover:bg-white/10 hover:border-white/30
+         text-gray-300 hover:text-white font-medium px-6 py-3 rounded-xl
+         transition-all duration-300 active:scale-95;
+}
+
+/* Pulse animation for active alerts */
+.pulse-alert {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-ring {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+}
+
+/* Loading spinner */
+.spinner {
+  @apply w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin;
+}
+
+/* Tab navigation */
+.tab-active {
+  @apply text-white border-b-2 border-midnight-400;
+}
+
+.tab-inactive {
+  @apply text-gray-400 hover:text-gray-200 border-b-2 border-transparent hover:border-gray-600;
+}
+
