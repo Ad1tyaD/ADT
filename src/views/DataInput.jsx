@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { 
   FileJson, 
@@ -8,134 +8,161 @@ import {
   Activity,
   AlertCircle,
   CheckCircle,
-  Loader2
+  Loader2,
+  Download,
+  Save,
+  BarChart3
 } from 'lucide-react'
 import { useTrade } from '../context/TradeContext'
+import { parseMarketData, formatForDisplay } from '../utils/jsonParser'
 
 function DataInput() {
   const navigate = useNavigate()
-  const { saveMarketData, runAnalysis, isLoading, error, isApiConfigured } = useTrade()
+  const { 
+    currentInstrument,
+    setCurrentInstrument,
+    saveMarketData, 
+    getCurrentMarketData,
+    runAnalysis, 
+    isLoading, 
+    error, 
+    isApiConfigured,
+    user
+  } = useTrade()
   
-  // Form state
-  const [formData, setFormData] = useState({
-    date: new Date().toISOString().split('T')[0],
-    spot: {
-      open: '',
-      high: '',
-      low: '',
-      close: ''
-    },
-    indicators: {
-      dma10: '',
-      dma50: '',
-      rsi: '',
-      macd: {
-        value: '',
-        signal: '',
-        histogram: ''
-      }
-    },
-    optionChain: ''
-  })
-  
-  const [inputMode, setInputMode] = useState('manual') // 'manual' | 'json' | 'csv'
   const [jsonInput, setJsonInput] = useState('')
+  const [optionChainCsv, setOptionChainCsv] = useState('')
   const [parseError, setParseError] = useState('')
+  const [parsedData, setParsedData] = useState(null)
+  const [displayData, setDisplayData] = useState(null)
   const [success, setSuccess] = useState(false)
 
-  // Handle form field changes
-  const handleChange = (section, field, value) => {
-    if (section === 'spot') {
-      setFormData(prev => ({
-        ...prev,
-        spot: { ...prev.spot, [field]: value }
-      }))
-    } else if (section === 'indicators') {
-      if (field.includes('macd.')) {
-        const macdField = field.split('.')[1]
-        setFormData(prev => ({
-          ...prev,
-          indicators: {
-            ...prev.indicators,
-            macd: { ...prev.indicators.macd, [macdField]: value }
+  // Load existing data when instrument changes
+  useEffect(() => {
+    loadExistingData()
+  }, [currentInstrument])
+
+  const loadExistingData = () => {
+    const existing = getCurrentMarketData()
+    if (existing) {
+      try {
+        // If data is stored as JSON string, parse it
+        const dataToLoad = typeof existing === 'string' ? JSON.parse(existing) : existing
+        
+        if (dataToLoad.jsonData) {
+          setJsonInput(JSON.stringify(dataToLoad.jsonData, null, 2))
+        }
+        if (dataToLoad.optionChain) {
+          setOptionChainCsv(dataToLoad.optionChain)
+        }
+        
+        // Parse and display
+        if (dataToLoad.jsonData) {
+          const result = parseMarketData(JSON.stringify(dataToLoad.jsonData))
+          if (result.success) {
+            setParsedData(result.data)
+            setDisplayData(formatForDisplay(result.data))
           }
-        }))
-      } else {
-        setFormData(prev => ({
-          ...prev,
-          indicators: { ...prev.indicators, [field]: value }
-        }))
+        }
+      } catch (err) {
+        console.error('Error loading existing data:', err)
       }
     } else {
-      setFormData(prev => ({ ...prev, [field]: value }))
+      // Clear form if no data
+      setJsonInput('')
+      setOptionChainCsv('')
+      setParsedData(null)
+      setDisplayData(null)
     }
   }
 
-  // Parse JSON input
-  const parseJsonInput = () => {
+  // Parse JSON when input changes
+  const handleJsonChange = (value) => {
+    setJsonInput(value)
+    setParseError('')
+    setParsedData(null)
+    setDisplayData(null)
+    setSuccess(false)
+
+    if (!value.trim()) {
+      return
+    }
+
     try {
-      const parsed = JSON.parse(jsonInput)
-      setFormData({
-        date: parsed.date || formData.date,
-        spot: {
-          open: parsed.spot?.open || parsed.open || '',
-          high: parsed.spot?.high || parsed.high || '',
-          low: parsed.spot?.low || parsed.low || '',
-          close: parsed.spot?.close || parsed.close || ''
-        },
-        indicators: {
-          dma10: parsed.indicators?.dma10 || parsed.dma10 || '',
-          dma50: parsed.indicators?.dma50 || parsed.dma50 || '',
-          rsi: parsed.indicators?.rsi || parsed.rsi || '',
-          macd: {
-            value: parsed.indicators?.macd?.value || parsed.macd?.value || '',
-            signal: parsed.indicators?.macd?.signal || parsed.macd?.signal || '',
-            histogram: parsed.indicators?.macd?.histogram || parsed.macd?.histogram || ''
-          }
-        },
-        optionChain: parsed.optionChain || ''
-      })
-      setParseError('')
-      setInputMode('manual')
+      const result = parseMarketData(value)
+      if (result.success) {
+        setParsedData(result.data)
+        setDisplayData(formatForDisplay(result.data))
+        setParseError('')
+      } else {
+        setParseError(result.error)
+        setParsedData(null)
+        setDisplayData(null)
+      }
     } catch (err) {
-      setParseError('Invalid JSON format. Please check your input.')
+      setParseError(err.message || 'Invalid JSON format')
+      setParsedData(null)
+      setDisplayData(null)
     }
   }
 
-  // Parse CSV input for option chain
-  const handleOptionChainPaste = (value) => {
-    setFormData(prev => ({ ...prev, optionChain: value }))
+  // Save data to Firestore
+  const handleSave = async () => {
+    if (!parsedData) {
+      setParseError('Please enter valid JSON data first')
+      return
+    }
+
+    if (!user) {
+      setParseError('Please login to save data')
+      return
+    }
+
+    setSuccess(false)
+
+    try {
+      // Parse JSON to get array
+      const jsonArray = JSON.parse(jsonInput)
+      
+      const dataToSave = {
+        jsonData: jsonArray,
+        optionChain: optionChainCsv,
+        instrument: currentInstrument,
+        date: parsedData.date
+      }
+
+      const saved = await saveMarketData(currentInstrument, dataToSave)
+      
+      if (saved) {
+        setSuccess(true)
+        setTimeout(() => setSuccess(false), 3000)
+      }
+    } catch (err) {
+      setParseError(err.message || 'Failed to save data')
+    }
   }
 
   // Submit and analyze
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setSuccess(false)
-    
+  const handleAnalyze = async () => {
+    if (!parsedData) {
+      setParseError('Please enter and parse valid JSON data first')
+      return
+    }
+
     if (!isApiConfigured) {
       navigate('/settings')
       return
     }
 
-    // Validate required fields
-    const requiredFields = [
-      formData.spot.open,
-      formData.spot.high,
-      formData.spot.low,
-      formData.spot.close,
-      formData.indicators.dma10,
-      formData.indicators.dma50,
-      formData.indicators.rsi
-    ]
-
-    if (requiredFields.some(f => !f)) {
-      setParseError('Please fill in all required fields (Spot OHLC, DMAs, RSI)')
-      return
+    // Prepare data for analysis
+    const analysisData = {
+      date: parsedData.date,
+      spot: parsedData.spot,
+      indicators: parsedData.indicators,
+      optionChain: optionChainCsv
     }
 
-    // Save and analyze
-    saveMarketData(formData)
-    const analysis = await runAnalysis(formData)
+    const analysis = await runAnalysis(analysisData)
     
     if (analysis) {
       setSuccess(true)
@@ -146,37 +173,28 @@ function DataInput() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
+    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold">Market Data Input</h1>
-          <p className="text-gray-400 text-sm mt-1">Enter daily market data for analysis</p>
+          <p className="text-gray-400 text-sm mt-1">Enter JSON data for market analysis</p>
         </div>
         
-        {/* Input Mode Toggle */}
-        <div className="flex gap-2 bg-white/5 p-1 rounded-lg">
-          <button
-            onClick={() => setInputMode('manual')}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-              inputMode === 'manual' 
-                ? 'bg-midnight-500 text-white' 
-                : 'text-gray-400 hover:text-white'
-            }`}
+        {/* Instrument Selector */}
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-gray-400 font-medium">Instrument:</label>
+          <select
+            value={currentInstrument}
+            onChange={(e) => {
+              setCurrentInstrument(e.target.value)
+              setSuccess(false)
+            }}
+            className="bg-midnight-950/50 border border-white/10 rounded-lg px-4 py-2 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-midnight-500/50"
           >
-            Manual
-          </button>
-          <button
-            onClick={() => setInputMode('json')}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1 ${
-              inputMode === 'json' 
-                ? 'bg-midnight-500 text-white' 
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            <FileJson className="w-4 h-4" />
-            JSON
-          </button>
+            <option value="NIFTY">NIFTY</option>
+            <option value="BANKNIFTY">BANK NIFTY</option>
+          </select>
         </div>
       </div>
 
@@ -195,7 +213,10 @@ function DataInput() {
       {(error || parseError) && (
         <div className="glass-card p-4 border-l-4 border-loss flex items-center gap-3">
           <AlertCircle className="w-5 h-5 text-loss flex-shrink-0" />
-          <p className="text-loss-light">{error || parseError}</p>
+          <div className="flex-1">
+            <p className="text-loss-light font-medium">Error</p>
+            <p className="text-loss-light text-sm mt-1 whitespace-pre-line">{error || parseError}</p>
+          </div>
         </div>
       )}
 
@@ -203,262 +224,250 @@ function DataInput() {
       {success && (
         <div className="glass-card p-4 border-l-4 border-profit flex items-center gap-3">
           <CheckCircle className="w-5 h-5 text-profit flex-shrink-0" />
-          <p className="text-profit-light">Analysis complete! Redirecting...</p>
+          <p className="text-profit-light">Data saved successfully!</p>
         </div>
       )}
 
-      {/* JSON Input Mode */}
-      {inputMode === 'json' && (
-        <div className="glass-card p-6 space-y-4">
+      {/* Read-only Display Section */}
+      {displayData && (
+        <div className="glass-card p-6 space-y-6">
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 className="w-5 h-5 text-midnight-400" />
+            <h2 className="text-lg font-semibold">Parsed Data (Read-Only)</h2>
+          </div>
+
+          {/* Date */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Date</label>
+            <input
+              type="text"
+              value={displayData.date}
+              readOnly
+              className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+            />
+          </div>
+
+          {/* Spot Price OHLC */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp className="w-5 h-5 text-midnight-400" />
+              <h3 className="text-md font-semibold">Spot Price (OHLC)</h3>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Open</label>
+                <input
+                  type="text"
+                  value={displayData.spot.open}
+                  readOnly
+                  className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">High</label>
+                <input
+                  type="text"
+                  value={displayData.spot.high}
+                  readOnly
+                  className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Low</label>
+                <input
+                  type="text"
+                  value={displayData.spot.low}
+                  readOnly
+                  className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Close</label>
+                <input
+                  type="text"
+                  value={displayData.spot.close}
+                  readOnly
+                  className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Technical Indicators */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <Activity className="w-5 h-5 text-purple-400" />
+              <h3 className="text-md font-semibold">Technical Indicators</h3>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">10 DMA</label>
+                <input
+                  type="text"
+                  value={displayData.indicators.dma10}
+                  readOnly
+                  className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">50 DMA</label>
+                <input
+                  type="text"
+                  value={displayData.indicators.dma50}
+                  readOnly
+                  className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">RSI (14)</label>
+                <input
+                  type="text"
+                  value={displayData.indicators.rsi}
+                  readOnly
+                  className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-gray-500 mb-2">MACD</label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Value</label>
+                  <input
+                    type="text"
+                    value={displayData.indicators.macd.value}
+                    readOnly
+                    className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Signal</label>
+                  <input
+                    type="text"
+                    value={displayData.indicators.macd.signal}
+                    readOnly
+                    className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Histogram</label>
+                  <input
+                    type="text"
+                    value={displayData.indicators.macd.histogram}
+                    readOnly
+                    className="w-full bg-midnight-900/50 text-gray-300 cursor-not-allowed"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* JSON Input */}
+      <div className="glass-card p-6 space-y-4">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-gray-300">
             <FileJson className="w-5 h-5" />
-            <span className="font-medium">Paste JSON Data</span>
+            <span className="font-medium">Market Data JSON</span>
           </div>
-          <textarea
-            value={jsonInput}
-            onChange={(e) => setJsonInput(e.target.value)}
-            placeholder={`{
-  "date": "2024-01-15",
-  "spot": { "open": 21500, "high": 21650, "low": 21450, "close": 21600 },
-  "indicators": {
-    "dma10": 21400,
-    "dma50": 21200,
-    "rsi": 55,
-    "macd": { "value": 50, "signal": 40, "histogram": 10 }
-  },
-  "optionChain": "Strike,CallOI,CallLTP,PutOI,PutLTP\\n21500,50000,150,40000,120"
-}`}
-            className="w-full h-64 font-mono text-sm"
-          />
           <button
-            onClick={parseJsonInput}
-            className="btn-primary flex items-center gap-2"
+            onClick={loadExistingData}
+            className="btn-ghost flex items-center gap-2 text-sm"
           >
-            <Upload className="w-4 h-4" />
-            Parse & Fill Form
+            <Download className="w-4 h-4" />
+            Load Existing
           </button>
         </div>
-      )}
+        <p className="text-sm text-gray-400">
+          Paste JSON array with Date, OHLC, and indicators. Latest entry will be used for analysis.
+        </p>
+        <textarea
+          value={jsonInput}
+          onChange={(e) => handleJsonChange(e.target.value)}
+          placeholder={`[
+  {
+    "Date": "Mon Dec 01 2025 00:00:00 GMT+0530 (India Standard Time)",
+    "Open": "60102.05",
+    "High": "60114.30",
+    "Low": "59527.60",
+    "Close": "59681.35",
+    "MA_ma_(50,ma,0)": "57386.41",
+    "RSI_rsi_(14)": "70.51",
+    "MACD_macd_(12,26,9)": "620.28",
+    "Signal_macd_(12,26,9)": "591.17",
+    "macd_(12,26,9)_hist": "29.11",
+    "MA_ma_(10,ma,0)": "59268.58"
+  }
+]`}
+          className="w-full h-64 font-mono text-sm"
+        />
+      </div>
 
-      {/* Manual Input Form */}
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Date */}
-        <div className="glass-card p-6">
-          <label className="block text-sm font-medium text-gray-300 mb-2">Date</label>
-          <input
-            type="date"
-            value={formData.date}
-            onChange={(e) => handleChange('root', 'date', e.target.value)}
-            className="w-full max-w-xs"
-          />
+      {/* Option Chain CSV */}
+      <div className="glass-card p-6 space-y-4">
+        <div className="flex items-center gap-2 text-gray-300">
+          <FileSpreadsheet className="w-5 h-5" />
+          <span className="font-medium">Option Chain Data (CSV)</span>
         </div>
-
-        {/* Spot Price OHLC */}
-        <div className="glass-card p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <TrendingUp className="w-5 h-5 text-midnight-400" />
-            <h2 className="text-lg font-semibold">Spot Price (OHLC)</h2>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Open *</label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.spot.open}
-                onChange={(e) => handleChange('spot', 'open', e.target.value)}
-                placeholder="21500.00"
-                className="w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">High *</label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.spot.high}
-                onChange={(e) => handleChange('spot', 'high', e.target.value)}
-                placeholder="21650.00"
-                className="w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Low *</label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.spot.low}
-                onChange={(e) => handleChange('spot', 'low', e.target.value)}
-                placeholder="21450.00"
-                className="w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Close *</label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.spot.close}
-                onChange={(e) => handleChange('spot', 'close', e.target.value)}
-                placeholder="21600.00"
-                className="w-full"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Technical Indicators */}
-        <div className="glass-card p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Activity className="w-5 h-5 text-purple-400" />
-            <h2 className="text-lg font-semibold">Technical Indicators</h2>
-          </div>
-          
-          {/* Moving Averages & RSI */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">10 DMA *</label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.indicators.dma10}
-                onChange={(e) => handleChange('indicators', 'dma10', e.target.value)}
-                placeholder="21400.00"
-                className="w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">50 DMA *</label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.indicators.dma50}
-                onChange={(e) => handleChange('indicators', 'dma50', e.target.value)}
-                placeholder="21200.00"
-                className="w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">RSI (14) *</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                max="100"
-                value={formData.indicators.rsi}
-                onChange={(e) => handleChange('indicators', 'rsi', e.target.value)}
-                placeholder="55"
-                className="w-full"
-              />
-            </div>
-          </div>
-
-          {/* MACD */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">MACD</label>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Value</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={formData.indicators.macd.value}
-                  onChange={(e) => handleChange('indicators', 'macd.value', e.target.value)}
-                  placeholder="50"
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Signal</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={formData.indicators.macd.signal}
-                  onChange={(e) => handleChange('indicators', 'macd.signal', e.target.value)}
-                  placeholder="40"
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Histogram</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={formData.indicators.macd.histogram}
-                  onChange={(e) => handleChange('indicators', 'macd.histogram', e.target.value)}
-                  placeholder="10"
-                  className="w-full"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Option Chain Data */}
-        <div className="glass-card p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-lg font-semibold">Option Chain Data</h2>
-          </div>
-          <p className="text-sm text-gray-400 mb-3">
-            Paste CSV or JSON data with columns: Strike, Call OI, Call LTP, Put OI, Put LTP
-          </p>
-          <textarea
-            value={formData.optionChain}
-            onChange={(e) => handleOptionChainPaste(e.target.value)}
-            placeholder={`Strike,CallOI,CallLTP,PutOI,PutLTP
+        <p className="text-sm text-gray-400">
+          Paste CSV data with columns: Strike, Call OI, Call LTP, Put OI, Put LTP
+        </p>
+        <textarea
+          value={optionChainCsv}
+          onChange={(e) => setOptionChainCsv(e.target.value)}
+          placeholder={`Strike,CallOI,CallLTP,PutOI,PutLTP
 21400,45000,180,35000,90
 21500,50000,150,40000,120
-21600,55000,100,45000,160
-21700,40000,70,50000,210`}
-            className="w-full h-40 font-mono text-sm"
-          />
-        </div>
+21600,55000,100,45000,160`}
+          className="w-full h-40 font-mono text-sm"
+        />
+      </div>
 
-        {/* Submit Button */}
-        <div className="flex justify-end gap-4">
-          <button
-            type="button"
-            onClick={() => {
-              setFormData({
-                date: new Date().toISOString().split('T')[0],
-                spot: { open: '', high: '', low: '', close: '' },
-                indicators: {
-                  dma10: '',
-                  dma50: '',
-                  rsi: '',
-                  macd: { value: '', signal: '', histogram: '' }
-                },
-                optionChain: ''
-              })
-              setParseError('')
-            }}
-            className="btn-ghost"
-          >
-            Clear Form
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading || !isApiConfigured}
-            className="btn-success flex items-center gap-2"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Analyzing...
-              </>
-            ) : (
-              <>
-                <TrendingUp className="w-4 h-4" />
-                Analyze Market
-              </>
-            )}
-          </button>
-        </div>
-      </form>
+      {/* Action Buttons */}
+      <div className="flex justify-end gap-4">
+        <button
+          onClick={() => {
+            setJsonInput('')
+            setOptionChainCsv('')
+            setParsedData(null)
+            setDisplayData(null)
+            setParseError('')
+            setSuccess(false)
+          }}
+          className="btn-ghost"
+        >
+          Clear
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={isLoading || !parsedData || !user}
+          className="btn-primary flex items-center gap-2"
+        >
+          {isLoading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4" />
+          )}
+          Save Data
+        </button>
+        <button
+          onClick={handleAnalyze}
+          disabled={isLoading || !parsedData || !isApiConfigured}
+          className="btn-success flex items-center gap-2"
+        >
+          {isLoading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <TrendingUp className="w-4 h-4" />
+          )}
+          Analyze Market
+        </button>
+      </div>
     </div>
   )
 }
 
 export default DataInput
-

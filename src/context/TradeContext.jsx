@@ -1,20 +1,40 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import storageService from '../services/StorageService'
 import geminiService from '../services/GeminiService'
+import firebaseService from '../services/FirebaseService'
 
 const TradeContext = createContext(null)
 
 export function TradeProvider({ children }) {
   // State
+  const [user, setUser] = useState(null)
   const [isApiConfigured, setIsApiConfigured] = useState(false)
   const [activeTrades, setActiveTrades] = useState([])
   const [tradeHistory, setTradeHistory] = useState([])
   const [lastAnalysis, setLastAnalysis] = useState(null)
-  const [marketData, setMarketData] = useState(null)
+  const [marketData, setMarketData] = useState({ nifty: null, banknifty: null })
+  const [currentInstrument, setCurrentInstrument] = useState('NIFTY')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  // Initialize on mount
+  // Initialize auth state listener
+  useEffect(() => {
+    const unsubscribe = firebaseService.onAuthStateChange((authUser) => {
+      setUser(authUser)
+      if (authUser) {
+        loadUserData(authUser.uid)
+      } else {
+        // Clear data on logout
+        setActiveTrades([])
+        setTradeHistory([])
+        setMarketData({ nifty: null, banknifty: null })
+      }
+    })
+
+    return () => unsubscribe()
+  }, [])
+
+  // Initialize Gemini API on mount
   useEffect(() => {
     const apiKey = storageService.getApiKey()
     if (apiKey) {
@@ -25,12 +45,38 @@ export function TradeProvider({ children }) {
         console.error('Failed to initialize Gemini:', err)
       }
     }
-
-    setActiveTrades(storageService.getActiveTrades())
-    setTradeHistory(storageService.getTradeHistory())
-    setLastAnalysis(storageService.getLastAnalysis())
-    setMarketData(storageService.getMarketData())
   }, [])
+
+  // Load user data from Firestore
+  const loadUserData = async (userId) => {
+    setIsLoading(true)
+    try {
+      // Load active trades
+      const tradesResult = await firebaseService.getActiveTrades(userId)
+      if (tradesResult.success) {
+        setActiveTrades(tradesResult.data)
+      }
+
+      // Load trade history
+      const historyResult = await firebaseService.getTradeHistory(userId)
+      if (historyResult.success) {
+        setTradeHistory(historyResult.data)
+      }
+
+      // Load market data for both instruments
+      const niftyResult = await firebaseService.getMarketData(userId, 'NIFTY')
+      const bankniftyResult = await firebaseService.getMarketData(userId, 'BANKNIFTY')
+      
+      setMarketData({
+        nifty: niftyResult.success ? niftyResult.data : null,
+        banknifty: bankniftyResult.success ? bankniftyResult.data : null
+      })
+    } catch (err) {
+      console.error('Error loading user data:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   // Configure API
   const configureApi = useCallback((apiKey) => {
@@ -46,11 +92,39 @@ export function TradeProvider({ children }) {
     }
   }, [])
 
-  // Save market data
-  const saveMarketData = useCallback((data) => {
-    setMarketData(data)
-    storageService.saveMarketData(data)
-  }, [])
+  // Save market data to Firestore
+  const saveMarketData = useCallback(async (instrument, data) => {
+    if (!user) {
+      setError('Please login to save data')
+      return false
+    }
+
+    setIsLoading(true)
+    try {
+      const result = await firebaseService.saveMarketData(user.uid, instrument, data)
+      if (result.success) {
+        setMarketData(prev => ({
+          ...prev,
+          [instrument.toLowerCase()]: { data, updatedAt: new Date().toISOString() }
+        }))
+        return true
+      } else {
+        setError(result.error)
+        return false
+      }
+    } catch (err) {
+      setError(err.message)
+      return false
+    } finally {
+      setIsLoading(false)
+    }
+  }, [user])
+
+  // Get current market data
+  const getCurrentMarketData = useCallback(() => {
+    const key = currentInstrument.toLowerCase()
+    return marketData[key]?.data || null
+  }, [currentInstrument, marketData])
 
   // Run market analysis
   const runAnalysis = useCallback(async (data) => {
@@ -76,7 +150,12 @@ export function TradeProvider({ children }) {
   }, [isApiConfigured])
 
   // Accept trade and add to active trades
-  const acceptTrade = useCallback((analysis, entryData) => {
+  const acceptTrade = useCallback(async (analysis, entryData) => {
+    if (!user) {
+      setError('Please login to save trades')
+      return null
+    }
+
     const trade = {
       entryDate: entryData.date || new Date().toISOString().split('T')[0],
       entrySpot: entryData.spotPrice,
@@ -84,34 +163,82 @@ export function TradeProvider({ children }) {
       confidence: analysis.confidence,
       strategy: analysis.strategy,
       alerts: analysis.alerts,
-      analysis: analysis.analysis
+      analysis: analysis.analysis,
+      instrument: currentInstrument,
+      status: 'ACTIVE',
+      createdAt: new Date().toISOString(),
+      updates: []
     }
 
-    const newTrade = storageService.addActiveTrade(trade)
-    setActiveTrades(prev => [...prev, newTrade])
-    return newTrade
-  }, [])
+    const tradeId = Date.now().toString()
+    trade.id = tradeId
+
+    setIsLoading(true)
+    try {
+      const result = await firebaseService.saveActiveTrade(user.uid, trade)
+      if (result.success) {
+        setActiveTrades(prev => [...prev, trade])
+        return trade
+      } else {
+        setError(result.error)
+        return null
+      }
+    } catch (err) {
+      setError(err.message)
+      return null
+    } finally {
+      setIsLoading(false)
+    }
+  }, [user, currentInstrument])
 
   // Update active trade
-  const updateTrade = useCallback((tradeId, updates) => {
-    const updatedTrade = storageService.updateActiveTrade(tradeId, updates)
-    if (updatedTrade) {
-      setActiveTrades(prev => 
-        prev.map(t => t.id === tradeId ? updatedTrade : t)
-      )
+  const updateTrade = useCallback(async (tradeId, updates) => {
+    setIsLoading(true)
+    try {
+      const result = await firebaseService.updateActiveTrade(tradeId, updates)
+      if (result.success) {
+        setActiveTrades(prev => 
+          prev.map(t => t.id === tradeId ? { ...t, ...updates } : t)
+        )
+        return { ...updates, id: tradeId }
+      } else {
+        setError(result.error)
+        return null
+      }
+    } catch (err) {
+      setError(err.message)
+      return null
+    } finally {
+      setIsLoading(false)
     }
-    return updatedTrade
   }, [])
 
   // Close trade
-  const closeTrade = useCallback((tradeId, closeData) => {
-    const closedTrade = storageService.closeTrade(tradeId, closeData)
-    if (closedTrade) {
-      setActiveTrades(prev => prev.filter(t => t.id !== tradeId))
-      setTradeHistory(prev => [closedTrade, ...prev])
+  const closeTrade = useCallback(async (tradeId, closeData) => {
+    setIsLoading(true)
+    try {
+      const result = await firebaseService.closeTrade(tradeId, closeData)
+      if (result.success) {
+        setActiveTrades(prev => prev.filter(t => t.id !== tradeId))
+        // Reload history to get updated list
+        if (user) {
+          const historyResult = await firebaseService.getTradeHistory(user.uid)
+          if (historyResult.success) {
+            setTradeHistory(historyResult.data)
+          }
+        }
+        return true
+      } else {
+        setError(result.error)
+        return false
+      }
+    } catch (err) {
+      setError(err.message)
+      return false
+    } finally {
+      setIsLoading(false)
     }
-    return closedTrade
-  }, [])
+  }, [user])
 
   // Run 3:15 PM routine
   const runRoutine = useCallback(async (trade, currentData) => {
@@ -127,7 +254,7 @@ export function TradeProvider({ children }) {
       const result = await geminiService.runRoutineCheck(trade, currentData)
       
       // Update trade with routine result
-      updateTrade(trade.id, {
+      await updateTrade(trade.id, {
         lastRoutineCheck: new Date().toISOString(),
         lastRoutineResult: result,
         updateNote: `3:15 PM Check: ${result.recommendation} - ${result.summary}`
@@ -166,26 +293,37 @@ export function TradeProvider({ children }) {
     }
   }, [tradeHistory, activeTrades])
 
+  // Logout
+  const logout = useCallback(async () => {
+    await firebaseService.signOut()
+    setUser(null)
+  }, [])
+
   const value = {
     // State
+    user,
     isApiConfigured,
     activeTrades,
     tradeHistory,
     lastAnalysis,
     marketData,
+    currentInstrument,
     isLoading,
     error,
     
     // Actions
+    setCurrentInstrument,
     configureApi,
     saveMarketData,
+    getCurrentMarketData,
     runAnalysis,
     acceptTrade,
     updateTrade,
     closeTrade,
     runRoutine,
     clearError,
-    getPortfolioStats
+    getPortfolioStats,
+    logout
   }
 
   return (
@@ -204,4 +342,3 @@ export function useTrade() {
 }
 
 export default TradeContext
-

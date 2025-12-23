@@ -8,19 +8,22 @@ import {
   Menu,
   X,
   Wifi,
-  WifiOff
+  WifiOff,
+  LogOut
 } from 'lucide-react'
 
 // Views
+import Login from './views/Login'
 import Dashboard from './views/Dashboard'
 import Analysis from './views/Analysis'
 import DataInput from './views/DataInput'
 import Settings from './views/Settings'
 
 // Context
-import { TradeProvider } from './context/TradeContext'
+import { TradeProvider, useTrade } from './context/TradeContext'
 
-function App() {
+function AppContent() {
+  const { user, logout } = useTrade()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const location = useLocation()
@@ -52,8 +55,7 @@ function App() {
   ]
 
   return (
-    <TradeProvider>
-      <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col">
         {/* Header */}
         <header className="glass-card rounded-none border-x-0 border-t-0 sticky top-0 z-50">
           <div className="container mx-auto px-4 py-3">
@@ -64,7 +66,7 @@ function App() {
                   <TrendingUp className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h1 className="text-lg font-bold gradient-text">Lifestyle Trader</h1>
+                  <h1 className="text-lg font-bold gradient-text">ADTrade</h1>
                   <p className="text-xs text-gray-500">Trading Assistant</p>
                 </div>
               </div>
@@ -89,14 +91,31 @@ function App() {
                 ))}
               </nav>
 
-              {/* Status & Mobile Menu Toggle */}
+              {/* Status & Actions */}
               <div className="flex items-center gap-3">
+                {user && (
+                  <div className="hidden md:flex items-center gap-2 text-sm text-gray-400">
+                    <span>{user.email}</span>
+                  </div>
+                )}
+                
                 <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs ${
                   isOnline ? 'bg-profit/20 text-profit-light' : 'bg-loss/20 text-loss-light'
                 }`}>
                   {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
                   <span className="hidden sm:inline">{isOnline ? 'Online' : 'Offline'}</span>
                 </div>
+
+                {user && (
+                  <button
+                    onClick={logout}
+                    className="btn-ghost flex items-center gap-2 text-sm"
+                    title="Logout"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span className="hidden sm:inline">Logout</span>
+                  </button>
+                )}
 
                 <button
                   onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -143,11 +162,28 @@ function App() {
 
         {/* Footer */}
         <footer className="border-t border-white/10 py-4 text-center text-xs text-gray-500">
-          <p>Lifestyle Trader PWA • Capital Preservation First</p>
+          <p>ADTrade PWA • Capital Preservation First</p>
         </footer>
       </div>
+  )
+}
+
+function App() {
+  return (
+    <TradeProvider>
+      <AppRouter />
     </TradeProvider>
   )
+}
+
+function AppRouter() {
+  const { user } = useTrade()
+
+  if (!user) {
+    return <Login />
+  }
+
+  return <AppContent />
 }
 
 export default App
