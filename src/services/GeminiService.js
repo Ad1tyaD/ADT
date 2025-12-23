@@ -157,8 +157,19 @@ class GeminiService {
     }
     
     this.genAI = new GoogleGenerativeAI(apiKey)
+    
+    // Try multiple model names - use the first one that works
+    const modelsToTry = [
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+      'gemini-2.0-flash-exp',
+      'gemini-pro',
+      'gemini-1.0-pro'
+    ]
+    
+    // Use gemini-2.5-flash (available for this API key)
     this.model = this.genAI.getGenerativeModel({ 
-      model: 'gemini-pro',
+      model: 'gemini-2.5-flash',
       generationConfig: {
         temperature: 0.3, // Lower for more consistent analysis
         topP: 0.8,
