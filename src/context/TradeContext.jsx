@@ -34,18 +34,49 @@ export function TradeProvider({ children }) {
     return () => unsubscribe()
   }, [])
 
-  // Initialize Gemini API on mount
+  // Load API key from Firestore when user logs in
   useEffect(() => {
-    const apiKey = storageService.getApiKey()
-    if (apiKey) {
-      try {
-        geminiService.initialize(apiKey)
-        setIsApiConfigured(true)
-      } catch (err) {
-        console.error('Failed to initialize Gemini:', err)
-      }
+    if (user) {
+      loadApiKey(user.uid)
+    } else {
+      setIsApiConfigured(false)
     }
-  }, [])
+  }, [user])
+
+  // Load API key from Firestore
+  const loadApiKey = async (userId) => {
+    try {
+      const result = await firebaseService.getApiKey(userId)
+      if (result.success && result.apiKey) {
+        try {
+          geminiService.initialize(result.apiKey)
+          setIsApiConfigured(true)
+        } catch (err) {
+          console.error('Failed to initialize Gemini:', err)
+          setIsApiConfigured(false)
+        }
+      } else {
+        // Fallback to localStorage for backward compatibility
+        const localKey = storageService.getApiKey()
+        if (localKey) {
+          try {
+            geminiService.initialize(localKey)
+            setIsApiConfigured(true)
+            // Migrate to Firestore
+            await firebaseService.saveApiKey(userId, localKey)
+          } catch (err) {
+            console.error('Failed to initialize Gemini:', err)
+            setIsApiConfigured(false)
+          }
+        } else {
+          setIsApiConfigured(false)
+        }
+      }
+    } catch (err) {
+      console.error('Error loading API key:', err)
+      setIsApiConfigured(false)
+    }
+  }
 
   // Load user data from Firestore
   const loadUserData = async (userId) => {
@@ -79,18 +110,31 @@ export function TradeProvider({ children }) {
   }
 
   // Configure API
-  const configureApi = useCallback((apiKey) => {
+  const configureApi = useCallback(async (apiKey) => {
+    if (!user) {
+      setError('Please login to save API key')
+      return false
+    }
+
     try {
       geminiService.initialize(apiKey)
-      storageService.saveApiKey(apiKey)
-      setIsApiConfigured(true)
-      setError(null)
-      return true
+      // Save to Firestore (primary)
+      const result = await firebaseService.saveApiKey(user.uid, apiKey)
+      if (result.success) {
+        // Also save to localStorage as backup
+        storageService.saveApiKey(apiKey)
+        setIsApiConfigured(true)
+        setError(null)
+        return true
+      } else {
+        setError(result.error || 'Failed to save API key')
+        return false
+      }
     } catch (err) {
       setError(err.message)
       return false
     }
-  }, [])
+  }, [user])
 
   // Save market data to Firestore
   const saveMarketData = useCallback(async (instrument, data) => {

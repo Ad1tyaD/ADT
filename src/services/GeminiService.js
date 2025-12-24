@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
 /**
- * Fix common JSON issues
+ * Fix common JSON issues (minimal approach)
  */
 function fixJsonString(jsonString) {
   let fixed = jsonString
@@ -9,14 +9,16 @@ function fixJsonString(jsonString) {
   // Remove trailing commas before closing braces/brackets
   fixed = fixed.replace(/,(\s*[}\]])/g, '$1')
   
-  // Fix unescaped newlines in strings
-  fixed = fixed.replace(/("(?:[^"\\]|\\.)*")\s*\n\s*(")/g, '$1 $2')
+  // Fix unescaped newlines in strings (replace with space)
+  fixed = fixed.replace(/: "([^"]*)\n([^"]*)"/g, ': "$1 $2"')
   
-  // Fix unescaped quotes in string values (but not in keys)
-  fixed = fixed.replace(/:\s*"([^"]*)"([^,}\]]*)"([^,}\]]*)/g, (match, p1, p2, p3) => {
-    // Only fix if it looks like an unterminated string
-    if (p2 && !p2.match(/^[,\s}]*$/)) {
-      return `: "${p1}${p2.replace(/"/g, "'")}${p3.replace(/"/g, "'")}"`
+  // Fix unescaped quotes in string values - be very careful
+  // Only fix obvious unterminated strings (quotes followed by comma/brace without closing quote)
+  fixed = fixed.replace(/:\s*"([^"]*?)([^",}\]]*?)"([^,}\]]*?)([,}])/g, (match, p1, p2, p3, p4) => {
+    // If there's content after a quote but before comma/brace, it's likely an issue
+    if (p3 && p3.trim() && !p3.match(/^[\s}]*$/)) {
+      // Escape the problematic content
+      return `: "${p1}${p2}${p3.replace(/"/g, '\\"')}"${p4}`
     }
     return match
   })
@@ -388,26 +390,42 @@ Return your analysis as a single, valid JSON object now:`
         cleanedText = cleanedText.substring(firstBrace, lastBrace + 1)
       }
       
-      // Fix common JSON issues before parsing
-      cleanedText = fixJsonString(cleanedText)
-      
+      // Strategy 1: Try parsing raw response first (most valid JSON should work)
       try {
         return JSON.parse(cleanedText)
-      } catch (parseErr) {
-        console.error('Failed to parse Gemini response:', parseErr)
-        console.error('Response text (first 1000 chars):', cleanedText.substring(0, 1000))
+      } catch (firstErr) {
+        console.log('First parse attempt failed, trying repairs...')
+      }
+      
+      // Strategy 2: Apply minimal fixes (trailing commas only)
+      try {
+        const minimalFix = cleanedText.replace(/,(\s*[}\]])/g, '$1')
+        return JSON.parse(minimalFix)
+      } catch (secondErr) {
+        console.log('Minimal fix failed, trying more aggressive repairs...')
+      }
+      
+      // Strategy 3: Apply more aggressive repairs
+      try {
+        const fixed = fixJsonString(cleanedText)
+        return JSON.parse(fixed)
+      } catch (thirdErr) {
+        console.log('Standard repair failed, trying aggressive repair...')
+      }
+      
+      // Strategy 4: Aggressive repair
+      try {
+        const repaired = repairJson(cleanedText)
+        return JSON.parse(repaired)
+      } catch (fourthErr) {
+        console.error('All parsing attempts failed')
+        console.error('Response text (first 2000 chars):', cleanedText.substring(0, 2000))
         
-        // Try more aggressive JSON repair
+        // Last resort: extract basic fields
         try {
-          const repaired = repairJson(cleanedText)
-          return JSON.parse(repaired)
-        } catch (secondErr) {
-          // Last resort: try to extract just the essential fields
-          try {
-            return extractBasicJson(cleanedText)
-          } catch (thirdErr) {
-            throw new Error(`Failed to parse AI response. The AI may have returned invalid JSON. Error: ${parseErr.message}. Please try analyzing again. If this persists, the AI response format may need adjustment.`)
-          }
+          return extractBasicJson(cleanedText)
+        } catch (fifthErr) {
+          throw new Error(`Failed to parse AI response. The AI may have returned invalid JSON. Error: ${firstErr.message}. Please try analyzing again.`)
         }
       }
     } catch (error) {

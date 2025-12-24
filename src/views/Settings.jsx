@@ -15,9 +15,10 @@ import {
 } from 'lucide-react'
 import { useTrade } from '../context/TradeContext'
 import storageService from '../services/StorageService'
+import firebaseService from '../services/FirebaseService'
 
 function Settings() {
-  const { isApiConfigured, configureApi } = useTrade()
+  const { isApiConfigured, configureApi, user } = useTrade()
   
   const [apiKey, setApiKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -26,13 +27,30 @@ function Settings() {
   const [importData, setImportData] = useState('')
   const [showImport, setShowImport] = useState(false)
 
-  // Load existing API key (masked)
+  // Load existing API key from Firestore
   useEffect(() => {
-    const savedKey = storageService.getApiKey()
-    if (savedKey) {
-      setApiKey(savedKey)
+    const loadApiKey = async () => {
+      if (user) {
+        const result = await firebaseService.getApiKey(user.uid)
+        if (result.success && result.apiKey) {
+          setApiKey(result.apiKey)
+        } else {
+          // Fallback to localStorage
+          const localKey = storageService.getApiKey()
+          if (localKey) {
+            setApiKey(localKey)
+          }
+        }
+      } else {
+        // Not logged in, try localStorage
+        const localKey = storageService.getApiKey()
+        if (localKey) {
+          setApiKey(localKey)
+        }
+      }
     }
-  }, [])
+    loadApiKey()
+  }, [user])
 
   // Handle API key save
   const handleSaveApiKey = async () => {
@@ -45,9 +63,9 @@ function Settings() {
     setMessage({ type: '', text: '' })
 
     try {
-      const success = configureApi(apiKey.trim())
+      const success = await configureApi(apiKey.trim())
       if (success) {
-        setMessage({ type: 'success', text: 'API key saved successfully!' })
+        setMessage({ type: 'success', text: 'API key saved successfully! It will be available across all your devices.' })
       } else {
         setMessage({ type: 'error', text: 'Failed to configure API' })
       }

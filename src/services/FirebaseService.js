@@ -237,6 +237,42 @@ class FirebaseService {
       return { success: false, error: error.message, data: [] }
     }
   }
+
+  /**
+   * Save Gemini API key for user
+   */
+  async saveApiKey(userId, apiKey) {
+    try {
+      const userDocRef = doc(db, 'users', userId)
+      await setDoc(userDocRef, {
+        apiKey: apiKey,
+        updatedAt: new Date().toISOString()
+      }, { merge: true })
+      return { success: true }
+    } catch (error) {
+      console.error('Error saving API key:', error)
+      return { success: false, error: error.message }
+    }
+  }
+
+  /**
+   * Get Gemini API key for user
+   */
+  async getApiKey(userId) {
+    try {
+      const userDocRef = doc(db, 'users', userId)
+      const userDoc = await getDoc(userDocRef)
+      
+      if (userDoc.exists()) {
+        return { success: true, apiKey: userDoc.data().apiKey || null }
+      } else {
+        return { success: true, apiKey: null }
+      }
+    } catch (error) {
+      console.error('Error getting API key:', error)
+      return { success: false, error: error.message, apiKey: null }
+    }
+  }
 }
 
 const firebaseService = new FirebaseService()

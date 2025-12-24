@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { 
-  FileJson, 
   FileSpreadsheet, 
   Upload, 
   TrendingUp, 
@@ -11,10 +10,13 @@ import {
   Loader2,
   Download,
   Save,
-  BarChart3
+  BarChart3,
+  FileText
 } from 'lucide-react'
 import { useTrade } from '../context/TradeContext'
-import { parseMarketData, formatForDisplay } from '../utils/jsonParser'
+import { parseMarketDataCSV } from '../utils/marketDataCsvParser'
+import { parseOptionChainCSV } from '../utils/optionChainCsvParser'
+import { formatForDisplay } from '../utils/jsonParser'
 
 function DataInput() {
   const navigate = useNavigate()
@@ -30,12 +32,14 @@ function DataInput() {
     user
   } = useTrade()
   
-  const [jsonInput, setJsonInput] = useState('')
+  const [marketDataCsv, setMarketDataCsv] = useState('')
+  const [optionChainFile, setOptionChainFile] = useState(null)
   const [optionChainCsv, setOptionChainCsv] = useState('')
   const [parseError, setParseError] = useState('')
   const [parsedData, setParsedData] = useState(null)
   const [displayData, setDisplayData] = useState(null)
   const [success, setSuccess] = useState(false)
+  const [isParsing, setIsParsing] = useState(false)
 
   // Load existing data when instrument changes
   useEffect(() => {
@@ -46,39 +50,12 @@ function DataInput() {
     const existing = getCurrentMarketData()
     if (existing) {
       try {
-        // Handle different data formats
-        let dataToLoad
-        if (typeof existing === 'string') {
-          try {
-            dataToLoad = JSON.parse(existing)
-          } catch (parseErr) {
-            console.error('Error parsing existing data as JSON:', parseErr)
-            // If it's not valid JSON, it might be the raw data object
-            dataToLoad = existing
-          }
-        } else if (existing && typeof existing === 'object') {
-          // Check if it's the Firestore document structure
-          dataToLoad = existing.data || existing
-        } else {
-          dataToLoad = existing
-        }
+        const dataToLoad = typeof existing === 'string' ? JSON.parse(existing) : existing
         
-        if (dataToLoad && dataToLoad.jsonData) {
-          // Ensure jsonData is properly formatted
-          const jsonData = Array.isArray(dataToLoad.jsonData) 
-            ? dataToLoad.jsonData 
-            : (typeof dataToLoad.jsonData === 'string' 
-                ? JSON.parse(dataToLoad.jsonData) 
-                : [dataToLoad.jsonData])
-          
-          setJsonInput(JSON.stringify(jsonData, null, 2))
-          
+        if (dataToLoad && dataToLoad.marketDataCsv) {
+          setMarketDataCsv(dataToLoad.marketDataCsv)
           // Parse and display
-          const result = parseMarketData(JSON.stringify(jsonData))
-          if (result.success) {
-            setParsedData(result.data)
-            setDisplayData(formatForDisplay(result.data))
-          }
+          handleMarketDataChange(dataToLoad.marketDataCsv)
         }
         
         if (dataToLoad && dataToLoad.optionChain) {
@@ -86,20 +63,20 @@ function DataInput() {
         }
       } catch (err) {
         console.error('Error loading existing data:', err)
-        setParseError(`Error loading data: ${err.message}`)
       }
     } else {
       // Clear form if no data
-      setJsonInput('')
+      setMarketDataCsv('')
       setOptionChainCsv('')
+      setOptionChainFile(null)
       setParsedData(null)
       setDisplayData(null)
     }
   }
 
-  // Parse JSON when input changes
-  const handleJsonChange = (value) => {
-    setJsonInput(value)
+  // Parse market data CSV when input changes
+  const handleMarketDataChange = (value) => {
+    setMarketDataCsv(value)
     setParseError('')
     setParsedData(null)
     setDisplayData(null)
@@ -109,8 +86,9 @@ function DataInput() {
       return
     }
 
+    setIsParsing(true)
     try {
-      const result = parseMarketData(value)
+      const result = parseMarketDataCSV(value)
       if (result.success) {
         setParsedData(result.data)
         setDisplayData(formatForDisplay(result.data))
@@ -121,16 +99,46 @@ function DataInput() {
         setDisplayData(null)
       }
     } catch (err) {
-      setParseError(err.message || 'Invalid JSON format')
+      setParseError(err.message || 'Invalid CSV format')
       setParsedData(null)
       setDisplayData(null)
+    } finally {
+      setIsParsing(false)
+    }
+  }
+
+  // Handle option chain file upload
+  const handleOptionChainFile = async (event) => {
+    const file = event.target.files[0]
+    if (!file) return
+
+    setOptionChainFile(file)
+    setParseError('')
+    setIsParsing(true)
+
+    try {
+      const text = await file.text()
+      const result = parseOptionChainCSV(text)
+      
+      if (result.success) {
+        setOptionChainCsv(result.data)
+        setParseError('')
+      } else {
+        setParseError(`Option Chain Error: ${result.error}`)
+        setOptionChainCsv('')
+      }
+    } catch (err) {
+      setParseError(`Failed to read file: ${err.message}`)
+      setOptionChainCsv('')
+    } finally {
+      setIsParsing(false)
     }
   }
 
   // Save data to Firestore
   const handleSave = async () => {
     if (!parsedData) {
-      setParseError('Please enter valid JSON data first')
+      setParseError('Please enter valid market data CSV first')
       return
     }
 
@@ -142,19 +150,9 @@ function DataInput() {
     setSuccess(false)
 
     try {
-      // Parse JSON to get array (handle both single object and array)
-      let jsonArray
-      try {
-        const parsed = JSON.parse(jsonInput)
-        jsonArray = Array.isArray(parsed) ? parsed : [parsed]
-      } catch (parseErr) {
-        setParseError(`Invalid JSON format: ${parseErr.message}`)
-        return
-      }
-      
       const dataToSave = {
-        jsonData: jsonArray,
-        optionChain: optionChainCsv || '', // Ensure it's a string
+        marketDataCsv: marketDataCsv,
+        optionChain: optionChainCsv,
         instrument: currentInstrument,
         date: parsedData.date
       }
@@ -173,7 +171,7 @@ function DataInput() {
   // Submit and analyze
   const handleAnalyze = async () => {
     if (!parsedData) {
-      setParseError('Please enter and parse valid JSON data first')
+      setParseError('Please enter and parse valid market data CSV first')
       return
     }
 
@@ -187,7 +185,7 @@ function DataInput() {
       date: parsedData.date,
       spot: parsedData.spot,
       indicators: parsedData.indicators,
-      optionChain: optionChainCsv
+      optionChain: optionChainCsv || ''
     }
 
     const analysis = await runAnalysis(analysisData)
@@ -206,7 +204,7 @@ function DataInput() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold">Market Data Input</h1>
-          <p className="text-gray-400 text-sm mt-1">Enter JSON data for market analysis</p>
+          <p className="text-gray-400 text-sm mt-1">Enter CSV data for market analysis</p>
         </div>
         
         {/* Instrument Selector */}
@@ -261,7 +259,7 @@ function DataInput() {
         <div className="glass-card p-6 space-y-6">
           <div className="flex items-center gap-2 mb-4">
             <BarChart3 className="w-5 h-5 text-midnight-400" />
-            <h2 className="text-lg font-semibold">Parsed Data (Read-Only)</h2>
+            <h2 className="text-lg font-semibold">Parsed Data (Read-Only) - Most Recent Date</h2>
           </div>
 
           {/* Date */}
@@ -394,12 +392,12 @@ function DataInput() {
         </div>
       )}
 
-      {/* JSON Input */}
+      {/* Market Data CSV Input */}
       <div className="glass-card p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-gray-300">
-            <FileJson className="w-5 h-5" />
-            <span className="font-medium">Market Data JSON</span>
+            <FileText className="w-5 h-5" />
+            <span className="font-medium">Market Data CSV</span>
           </div>
           <button
             onClick={loadExistingData}
@@ -410,56 +408,76 @@ function DataInput() {
           </button>
         </div>
         <p className="text-sm text-gray-400">
-          Paste JSON array with Date, OHLC, and indicators. Latest entry will be used for analysis.
+          Paste CSV data with multiple trading days. The most recent date will be automatically selected for analysis.
+        </p>
+        <p className="text-xs text-gray-500">
+          Expected columns: Date, Open, High, Low, Close, MA ma (50,ma,0), RSI rsi (5), RSI rsi (14), MACD macd (12,26,9), Signal macd (12,26,9), macd (12,26,9)_hist, MA ma (10,ma,0)
         </p>
         <textarea
-          value={jsonInput}
-          onChange={(e) => handleJsonChange(e.target.value)}
-          placeholder={`[
-  {
-    "Date": "Mon Dec 01 2025 00:00:00 GMT+0530 (India Standard Time)",
-    "Open": "60102.05",
-    "High": "60114.30",
-    "Low": "59527.60",
-    "Close": "59681.35",
-    "MA_ma_(50,ma,0)": "57386.41",
-    "RSI_rsi_(14)": "70.51",
-    "MACD_macd_(12,26,9)": "620.28",
-    "Signal_macd_(12,26,9)": "591.17",
-    "macd_(12,26,9)_hist": "29.11",
-    "MA_ma_(10,ma,0)": "59268.58"
-  }
-]`}
+          value={marketDataCsv}
+          onChange={(e) => handleMarketDataChange(e.target.value)}
+          placeholder={`"Date","Open","High","Low","Close","MA ma (50,ma,0)","RSI rsi (14)","MACD macd (12,26,9)","Signal macd (12,26,9)","macd (12,26,9)_hist","MA ma (10,ma,0)"
+"Wed Dec 24 2025 00:00:00 GMT+0530 (India Standard Time)","26170.65","26236.40","26139.45","26148.45","25892.48","57.45","54.99","45.79","9.20","25993.14"`}
           className="w-full h-64 font-mono text-sm"
         />
+        {isParsing && (
+          <div className="flex items-center gap-2 text-sm text-gray-400">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span>Parsing CSV and extracting most recent date...</span>
+          </div>
+        )}
       </div>
 
-      {/* Option Chain CSV */}
+      {/* Option Chain CSV File Upload */}
       <div className="glass-card p-6 space-y-4">
         <div className="flex items-center gap-2 text-gray-300">
           <FileSpreadsheet className="w-5 h-5" />
-          <span className="font-medium">Option Chain Data (CSV)</span>
+          <span className="font-medium">Option Chain Data (CSV File Upload)</span>
         </div>
         <p className="text-sm text-gray-400">
-          Paste CSV data with columns: Strike, Call OI, Call LTP, Put OI, Put LTP
+          Upload a CSV file with option chain data. The file will be automatically cleaned and formatted.
         </p>
-        <textarea
-          value={optionChainCsv}
-          onChange={(e) => setOptionChainCsv(e.target.value)}
-          placeholder={`Strike,CallOI,CallLTP,PutOI,PutLTP
-21400,45000,180,35000,90
-21500,50000,150,40000,120
-21600,55000,100,45000,160`}
-          className="w-full h-40 font-mono text-sm"
-        />
+        
+        <div className="flex items-center gap-4">
+          <label className="btn-primary flex items-center gap-2 cursor-pointer">
+            <Upload className="w-4 h-4" />
+            {optionChainFile ? optionChainFile.name : 'Upload CSV File'}
+            <input
+              type="file"
+              accept=".csv,.txt"
+              onChange={handleOptionChainFile}
+              className="hidden"
+            />
+          </label>
+          {optionChainFile && (
+            <span className="text-sm text-gray-400">
+              {optionChainFile.name} ({optionChainCsv ? optionChainCsv.split('\n').length - 1 : 0} rows)
+            </span>
+          )}
+        </div>
+
+        {optionChainCsv && (
+          <div className="mt-4">
+            <label className="block text-sm text-gray-400 mb-2">Cleaned Option Chain Data (Preview)</label>
+            <textarea
+              value={optionChainCsv}
+              readOnly
+              className="w-full h-40 font-mono text-xs bg-midnight-900/50 text-gray-400"
+            />
+            <p className="text-xs text-gray-500 mt-2">
+              This cleaned format will be sent to Gemini for analysis.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Action Buttons */}
       <div className="flex justify-end gap-4">
         <button
           onClick={() => {
-            setJsonInput('')
+            setMarketDataCsv('')
             setOptionChainCsv('')
+            setOptionChainFile(null)
             setParsedData(null)
             setDisplayData(null)
             setParseError('')
