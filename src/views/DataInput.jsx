@@ -46,26 +46,47 @@ function DataInput() {
     const existing = getCurrentMarketData()
     if (existing) {
       try {
-        // If data is stored as JSON string, parse it
-        const dataToLoad = typeof existing === 'string' ? JSON.parse(existing) : existing
-        
-        if (dataToLoad.jsonData) {
-          setJsonInput(JSON.stringify(dataToLoad.jsonData, null, 2))
+        // Handle different data formats
+        let dataToLoad
+        if (typeof existing === 'string') {
+          try {
+            dataToLoad = JSON.parse(existing)
+          } catch (parseErr) {
+            console.error('Error parsing existing data as JSON:', parseErr)
+            // If it's not valid JSON, it might be the raw data object
+            dataToLoad = existing
+          }
+        } else if (existing && typeof existing === 'object') {
+          // Check if it's the Firestore document structure
+          dataToLoad = existing.data || existing
+        } else {
+          dataToLoad = existing
         }
-        if (dataToLoad.optionChain) {
-          setOptionChainCsv(dataToLoad.optionChain)
-        }
         
-        // Parse and display
-        if (dataToLoad.jsonData) {
-          const result = parseMarketData(JSON.stringify(dataToLoad.jsonData))
+        if (dataToLoad && dataToLoad.jsonData) {
+          // Ensure jsonData is properly formatted
+          const jsonData = Array.isArray(dataToLoad.jsonData) 
+            ? dataToLoad.jsonData 
+            : (typeof dataToLoad.jsonData === 'string' 
+                ? JSON.parse(dataToLoad.jsonData) 
+                : [dataToLoad.jsonData])
+          
+          setJsonInput(JSON.stringify(jsonData, null, 2))
+          
+          // Parse and display
+          const result = parseMarketData(JSON.stringify(jsonData))
           if (result.success) {
             setParsedData(result.data)
             setDisplayData(formatForDisplay(result.data))
           }
         }
+        
+        if (dataToLoad && dataToLoad.optionChain) {
+          setOptionChainCsv(dataToLoad.optionChain)
+        }
       } catch (err) {
         console.error('Error loading existing data:', err)
+        setParseError(`Error loading data: ${err.message}`)
       }
     } else {
       // Clear form if no data
@@ -121,12 +142,19 @@ function DataInput() {
     setSuccess(false)
 
     try {
-      // Parse JSON to get array
-      const jsonArray = JSON.parse(jsonInput)
+      // Parse JSON to get array (handle both single object and array)
+      let jsonArray
+      try {
+        const parsed = JSON.parse(jsonInput)
+        jsonArray = Array.isArray(parsed) ? parsed : [parsed]
+      } catch (parseErr) {
+        setParseError(`Invalid JSON format: ${parseErr.message}`)
+        return
+      }
       
       const dataToSave = {
         jsonData: jsonArray,
-        optionChain: optionChainCsv,
+        optionChain: optionChainCsv || '', // Ensure it's a string
         instrument: currentInstrument,
         date: parsedData.date
       }

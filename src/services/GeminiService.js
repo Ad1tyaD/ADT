@@ -194,6 +194,12 @@ class GeminiService {
   formatMarketData(data) {
     const { date, spot, indicators, optionChain } = data
 
+    // Clean and escape the option chain CSV to prevent JSON parsing issues
+    let cleanOptionChain = optionChain || ''
+    // Remove any potential JSON-breaking characters from CSV
+    cleanOptionChain = cleanOptionChain.replace(/"/g, "'") // Replace double quotes with single quotes
+    cleanOptionChain = cleanOptionChain.replace(/\n/g, ' | ') // Replace newlines with pipe separator for better readability
+
     return `
 ## Market Data for ${date}
 
@@ -211,8 +217,12 @@ class GeminiService {
 - MACD Signal: ${indicators.macd.signal}
 - MACD Histogram: ${indicators.macd.histogram}
 
-### Option Chain Data
-${optionChain}
+### Option Chain Data (CSV format)
+The option chain data is provided below. Please analyze the Put-Call Ratio (PCR) and identify key support/resistance levels based on Open Interest (OI) concentrations.
+
+${cleanOptionChain}
+
+Note: Analyze the Strike prices, Call OI, Call LTP, Put OI, and Put LTP columns to determine market sentiment and key levels.
 `
   }
 
@@ -241,12 +251,38 @@ IMPORTANT: Return ONLY valid JSON, no markdown formatting or code blocks.`
       const text = response.text()
       
       // Clean the response (remove potential markdown code blocks)
-      const cleanedText = text
+      let cleanedText = text
         .replace(/```json\n?/g, '')
         .replace(/```\n?/g, '')
         .trim()
       
-      return JSON.parse(cleanedText)
+      // Try to extract JSON if it's wrapped in other text
+      // Look for the first { and last } to extract the JSON object
+      const firstBrace = cleanedText.indexOf('{')
+      const lastBrace = cleanedText.lastIndexOf('}')
+      
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleanedText = cleanedText.substring(firstBrace, lastBrace + 1)
+      }
+      
+      // Remove any trailing commas before closing braces/brackets
+      cleanedText = cleanedText.replace(/,(\s*[}\]])/g, '$1')
+      
+      try {
+        return JSON.parse(cleanedText)
+      } catch (parseErr) {
+        console.error('Failed to parse Gemini response:', parseErr)
+        console.error('Response text:', cleanedText.substring(0, 500))
+        
+        // Try to fix common JSON issues
+        try {
+          // Fix unescaped quotes in string values
+          let fixedText = cleanedText.replace(/: "([^"]*)"([^,}\]]*)"([^,}\]]*)/g, ': "$1$2$3"')
+          return JSON.parse(fixedText)
+        } catch (secondErr) {
+          throw new Error(`Failed to parse AI response. The AI may have returned invalid JSON. Error: ${parseErr.message}. Please try analyzing again.`)
+        }
+      }
     } catch (error) {
       console.error('Gemini API Error:', error)
       throw new Error(`Analysis failed: ${error.message}`)
