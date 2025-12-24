@@ -1,5 +1,119 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
+/**
+ * Fix common JSON issues
+ */
+function fixJsonString(jsonString) {
+  let fixed = jsonString
+  
+  // Remove trailing commas before closing braces/brackets
+  fixed = fixed.replace(/,(\s*[}\]])/g, '$1')
+  
+  // Fix unescaped newlines in strings
+  fixed = fixed.replace(/("(?:[^"\\]|\\.)*")\s*\n\s*(")/g, '$1 $2')
+  
+  // Fix unescaped quotes in string values (but not in keys)
+  fixed = fixed.replace(/:\s*"([^"]*)"([^,}\]]*)"([^,}\]]*)/g, (match, p1, p2, p3) => {
+    // Only fix if it looks like an unterminated string
+    if (p2 && !p2.match(/^[,\s}]*$/)) {
+      return `: "${p1}${p2.replace(/"/g, "'")}${p3.replace(/"/g, "'")}"`
+    }
+    return match
+  })
+  
+  return fixed
+}
+
+/**
+ * More aggressive JSON repair
+ */
+function repairJson(jsonString) {
+  let repaired = jsonString
+  
+  // Find all string values and ensure they're properly closed
+  const stringRegex = /"([^"\\]*(\\.[^"\\]*)*)"/g
+  let lastIndex = 0
+  let result = ''
+  let inString = false
+  let stringStart = -1
+  
+  for (let i = 0; i < repaired.length; i++) {
+    const char = repaired[i]
+    const prevChar = i > 0 ? repaired[i - 1] : ''
+    
+    if (char === '"' && prevChar !== '\\') {
+      if (!inString) {
+        inString = true
+        stringStart = i
+      } else {
+        inString = false
+        stringStart = -1
+      }
+    } else if (inString && (char === '\n' || char === '\r')) {
+      // Replace unescaped newlines in strings with space
+      repaired = repaired.substring(0, i) + ' ' + repaired.substring(i + 1)
+      i-- // Adjust index
+    }
+  }
+  
+  // If we're still in a string at the end, close it
+  if (inString && stringStart !== -1) {
+    // Find the next comma, colon, or closing brace
+    const nextBreak = repaired.indexOf(',', stringStart)
+    const nextColon = repaired.indexOf(':', stringStart)
+    const nextBrace = repaired.indexOf('}', stringStart)
+    
+    let insertPos = repaired.length
+    if (nextBreak !== -1) insertPos = Math.min(insertPos, nextBreak)
+    if (nextColon !== -1 && nextColon > stringStart) insertPos = Math.min(insertPos, nextColon)
+    if (nextBrace !== -1) insertPos = Math.min(insertPos, nextBrace)
+    
+    repaired = repaired.substring(0, insertPos) + '"' + repaired.substring(insertPos)
+  }
+  
+  return repaired
+}
+
+/**
+ * Extract basic JSON structure even if parsing fails
+ */
+function extractBasicJson(malformedJson) {
+  // Try to extract key fields using regex
+  const verdictMatch = malformedJson.match(/"verdict"\s*:\s*"([^"]+)"/)
+  const confidenceMatch = malformedJson.match(/"confidence"\s*:\s*"([^"]+)"/)
+  const summaryMatch = malformedJson.match(/"summary"\s*:\s*"([^"]*)"/)
+  
+  return {
+    verdict: verdictMatch ? verdictMatch[1] : 'NEUTRAL',
+    confidence: confidenceMatch ? confidenceMatch[1] : 'MEDIUM',
+    summary: summaryMatch ? summaryMatch[1] : 'Analysis completed but response format was invalid. Please try again.',
+    analysis: {
+      trend: 'Unable to parse',
+      momentum: 'Unable to parse',
+      pcr: 1.0,
+      pcrInterpretation: 'Unable to calculate',
+      maxPain: 0,
+      keyLevels: { support: 0, resistance: 0 }
+    },
+    strategy: {
+      name: 'Unable to determine',
+      type: 'DEBIT',
+      legs: [],
+      netPremium: 0,
+      maxProfit: 0,
+      maxLoss: 0,
+      riskReward: '1:1',
+      breakeven: 0,
+      rationale: 'Unable to parse strategy'
+    },
+    alerts: {
+      warning: { level: 0, description: 'Unable to determine' },
+      abort: { level: 0, description: 'Unable to determine' },
+      profitBooking: { level: 0, description: 'Unable to determine' }
+    }
+  }
+}
+
 // System prompts for different analysis modes
 const SYSTEM_PROMPTS = {
   analysis: `You are a Senior Trading Mentor with 20+ years of experience in Options Trading. 
@@ -242,8 +356,17 @@ Note: Analyze the Strike prices, Call OI, Call LTP, Put OI, and Put LTP columns 
 ${formattedData}
 ---
 
-Analyze the above data and provide your recommendation in the specified JSON format.
-IMPORTANT: Return ONLY valid JSON, no markdown formatting or code blocks.`
+CRITICAL INSTRUCTIONS:
+1. Analyze the above market data
+2. Return ONLY a valid JSON object - nothing else
+3. Do NOT include any explanatory text before or after the JSON
+4. Do NOT include markdown code blocks (no \`\`\`json)
+5. Ensure all string values are properly quoted and escaped
+6. Do NOT include any CSV data or raw numbers in string fields
+7. The response must start with { and end with }
+8. All quotes inside string values must be escaped with \\
+
+Return your analysis as a single, valid JSON object now:`
 
     try {
       const result = await this.model.generateContent(prompt)
@@ -265,22 +388,26 @@ IMPORTANT: Return ONLY valid JSON, no markdown formatting or code blocks.`
         cleanedText = cleanedText.substring(firstBrace, lastBrace + 1)
       }
       
-      // Remove any trailing commas before closing braces/brackets
-      cleanedText = cleanedText.replace(/,(\s*[}\]])/g, '$1')
+      // Fix common JSON issues before parsing
+      cleanedText = fixJsonString(cleanedText)
       
       try {
         return JSON.parse(cleanedText)
       } catch (parseErr) {
         console.error('Failed to parse Gemini response:', parseErr)
-        console.error('Response text:', cleanedText.substring(0, 500))
+        console.error('Response text (first 1000 chars):', cleanedText.substring(0, 1000))
         
-        // Try to fix common JSON issues
+        // Try more aggressive JSON repair
         try {
-          // Fix unescaped quotes in string values
-          let fixedText = cleanedText.replace(/: "([^"]*)"([^,}\]]*)"([^,}\]]*)/g, ': "$1$2$3"')
-          return JSON.parse(fixedText)
+          const repaired = repairJson(cleanedText)
+          return JSON.parse(repaired)
         } catch (secondErr) {
-          throw new Error(`Failed to parse AI response. The AI may have returned invalid JSON. Error: ${parseErr.message}. Please try analyzing again.`)
+          // Last resort: try to extract just the essential fields
+          try {
+            return extractBasicJson(cleanedText)
+          } catch (thirdErr) {
+            throw new Error(`Failed to parse AI response. The AI may have returned invalid JSON. Error: ${parseErr.message}. Please try analyzing again. If this persists, the AI response format may need adjustment.`)
+          }
         }
       }
     } catch (error) {
