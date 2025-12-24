@@ -5,10 +5,21 @@
 
 export function parseMarketData(jsonString) {
   try {
-    const dataArray = JSON.parse(jsonString)
+    const jsonData = JSON.parse(jsonString)
     
-    if (!Array.isArray(dataArray) || dataArray.length === 0) {
-      throw new Error('JSON must be an array with at least one entry')
+    // Handle both single object and array formats
+    let dataArray
+    if (Array.isArray(jsonData)) {
+      dataArray = jsonData
+    } else if (typeof jsonData === 'object' && jsonData !== null) {
+      // Single object - wrap it in an array
+      dataArray = [jsonData]
+    } else {
+      throw new Error('JSON must be an object or an array with at least one entry')
+    }
+    
+    if (dataArray.length === 0) {
+      throw new Error('JSON must contain at least one entry')
     }
 
     // Get the latest entry (last in array)
