@@ -77,41 +77,201 @@ function repairJson(jsonString) {
 }
 
 /**
- * Extract basic JSON structure even if parsing fails
+ * Complete incomplete JSON by adding missing closing braces/quotes
+ */
+function completeIncompleteJson(jsonString) {
+  let completed = jsonString.trim()
+  
+  // Count open and close braces/brackets (excluding escaped quotes)
+  const openBraces = (completed.match(/{/g) || []).length
+  const closeBraces = (completed.match(/}/g) || []).length
+  const openBrackets = (completed.match(/\[/g) || []).length
+  const closeBrackets = (completed.match(/\]/g) || []).length
+  
+  // Check if we're in the middle of a string (odd number of unescaped quotes)
+  // Count quotes that are not escaped
+  let quoteCount = 0
+  for (let i = 0; i < completed.length; i++) {
+    if (completed[i] === '"' && (i === 0 || completed[i - 1] !== '\\')) {
+      quoteCount++
+    }
+  }
+  const inString = quoteCount % 2 !== 0
+  
+  // If in a string, close it first
+  if (inString && !completed.endsWith('"')) {
+    // Find the last unclosed quote context
+    let lastQuoteIndex = -1
+    for (let i = completed.length - 1; i >= 0; i--) {
+      if (completed[i] === '"' && (i === 0 || completed[i - 1] !== '\\')) {
+        lastQuoteIndex = i
+        break
+      }
+    }
+    
+    if (lastQuoteIndex !== -1) {
+      const afterLastQuote = completed.substring(lastQuoteIndex + 1)
+      // If there's content after the last quote, it's likely the string value
+      if (afterLastQuote.trim() && !afterLastQuote.includes('"')) {
+        completed = completed + '"'
+      }
+    }
+  }
+  
+  // Add missing closing brackets
+  for (let i = 0; i < openBrackets - closeBrackets; i++) {
+    completed += ']'
+  }
+  
+  // Add missing closing braces
+  for (let i = 0; i < openBraces - closeBraces; i++) {
+    // Clean up trailing whitespace and ensure proper comma placement
+    completed = completed.trim()
+    // Remove trailing comma if present (we'll add it back if needed)
+    if (completed.endsWith(',')) {
+      completed = completed.slice(0, -1).trim()
+    }
+    // Only add comma if we're not at a structural boundary
+    if (!completed.endsWith('{') && !completed.endsWith('[') && !completed.endsWith(':')) {
+      // Check if last character is part of a value
+      const lastChar = completed[completed.length - 1]
+      if (lastChar !== '"' && lastChar !== '}' && lastChar !== ']' && lastChar !== '}') {
+        // We might need a comma, but let's be conservative
+      }
+    }
+    completed += '}'
+  }
+  
+  return completed
+}
+
+/**
+ * Extract JSON structure even if parsing fails - enhanced to extract all fields
  */
 function extractBasicJson(malformedJson) {
-  // Try to extract key fields using regex
+  // Helper to extract string values (handles incomplete strings)
+  const extractString = (key) => {
+    // Try to find the key and extract its value
+    const regex = new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`, 'g')
+    const match = regex.exec(malformedJson)
+    if (match && match[1]) {
+      return match[1]
+    }
+    
+    // Try to find incomplete string (key: "value... (no closing quote)
+    const incompleteRegex = new RegExp(`"${key}"\\s*:\\s*"([^"]*?)(?:"|,|\\n|$)`, 's')
+    const incompleteMatch = incompleteRegex.exec(malformedJson)
+    if (incompleteMatch && incompleteMatch[1]) {
+      return incompleteMatch[1].trim()
+    }
+    
+    return null
+  }
+  
+  // Helper to extract number values
+  const extractNumber = (key) => {
+    const regex = new RegExp(`"${key}"\\s*:\\s*(-?\\d+\\.?\\d*)`)
+    const match = regex.exec(malformedJson)
+    return match ? parseFloat(match[1]) : null
+  }
+  
+  // Note: extractNumber helper uses RegExp constructor which requires double backslashes
+  // The match() calls below use regex literals which use single backslashes
+  
+  // Extract verdict and confidence
   const verdictMatch = malformedJson.match(/"verdict"\s*:\s*"([^"]+)"/)
   const confidenceMatch = malformedJson.match(/"confidence"\s*:\s*"([^"]+)"/)
-  const summaryMatch = malformedJson.match(/"summary"\s*:\s*"([^"]*)"/)
+  const summaryMatch = malformedJson.match(/"summary"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  
+  // Extract analysis fields
+  const trendMatch = malformedJson.match(/"trend"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  const momentumMatch = malformedJson.match(/"momentum"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  
+  // Handle incomplete momentum (may not have closing quote)
+  let momentum = null
+  if (momentumMatch) {
+    momentum = momentumMatch[1]
+  } else {
+    // Try to extract incomplete momentum string (handles truncated responses)
+    // Look for "momentum": " and capture everything until end of string or next field
+    const incompleteMomentum = malformedJson.match(/"momentum"\s*:\s*"([^"]*?)(?:"|,\s*"|$)/s)
+    if (incompleteMomentum && incompleteMomentum[1]) {
+      momentum = incompleteMomentum[1].trim()
+    } else {
+      // Last resort: find everything after "momentum": " until we hit a pattern that looks like next field
+      const lastResort = malformedJson.match(/"momentum"\s*:\s*"([^"]*)/s)
+      if (lastResort && lastResort[1]) {
+        // Remove any trailing characters that look like they're part of next field
+        momentum = lastResort[1].replace(/,\s*"[^"]*"\s*:\s*.*$/, '').trim()
+      }
+    }
+  }
+  
+  // Extract PCR and maxPain
+  const pcrMatch = malformedJson.match(/"pcr"\s*:\s*(-?\d+\.?\d*)/)
+  const maxPainMatch = malformedJson.match(/"maxPain"\s*:\s*(-?\d+\.?\d*)/)
+  const pcrInterpretationMatch = malformedJson.match(/"pcrInterpretation"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  
+  // Extract key levels
+  const supportMatch = malformedJson.match(/"support"\s*:\s*(-?\d+\.?\d*)/)
+  const resistanceMatch = malformedJson.match(/"resistance"\s*:\s*(-?\d+\.?\d*)/)
+  
+  // Extract strategy fields
+  const strategyNameMatch = malformedJson.match(/"name"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  const strategyTypeMatch = malformedJson.match(/"type"\s*:\s*"([^"]+)"(?:\s*,|\s*})/)
+  const maxProfitMatch = malformedJson.match(/"maxProfit"\s*:\s*(-?\d+\.?\d*)/)
+  const maxLossMatch = malformedJson.match(/"maxLoss"\s*:\s*(-?\d+\.?\d*)/)
+  const riskRewardMatch = malformedJson.match(/"riskReward"\s*:\s*"([^"]+)"(?:\s*,|\s*})/)
+  const breakevenMatch = malformedJson.match(/"breakeven"\s*:\s*(-?\d+\.?\d*)/)
+  const rationaleMatch = malformedJson.match(/"rationale"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  
+  // Extract alert levels - need to handle nested objects
+  const warningLevelMatch = malformedJson.match(/"warning"\s*:\s*\{[^}]*"level"\s*:\s*(-?\d+\.?\d*)/)
+  const warningDescMatch = malformedJson.match(/"warning"\s*:\s*\{[^}]*"description"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  const abortLevelMatch = malformedJson.match(/"abort"\s*:\s*\{[^}]*"level"\s*:\s*(-?\d+\.?\d*)/)
+  const abortDescMatch = malformedJson.match(/"abort"\s*:\s*\{[^}]*"description"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
+  const profitLevelMatch = malformedJson.match(/"profitBooking"\s*:\s*\{[^}]*"level"\s*:\s*(-?\d+\.?\d*)/)
+  const profitDescMatch = malformedJson.match(/"profitBooking"\s*:\s*\{[^}]*"description"\s*:\s*"([^"]*)"(?:\s*,|\s*})/)
   
   return {
     verdict: verdictMatch ? verdictMatch[1] : 'NEUTRAL',
     confidence: confidenceMatch ? confidenceMatch[1] : 'MEDIUM',
     summary: summaryMatch ? summaryMatch[1] : 'Analysis completed but response format was invalid. Please try again.',
     analysis: {
-      trend: 'Unable to parse',
-      momentum: 'Unable to parse',
-      pcr: 1.0,
-      pcrInterpretation: 'Unable to calculate',
-      maxPain: 0,
-      keyLevels: { support: 0, resistance: 0 }
+      trend: trendMatch ? trendMatch[1] : 'Unable to parse',
+      momentum: momentum || 'Unable to parse',
+      pcr: pcrMatch ? parseFloat(pcrMatch[1]) : 1.0,
+      pcrInterpretation: pcrInterpretationMatch ? pcrInterpretationMatch[1] : 'Unable to calculate',
+      maxPain: maxPainMatch ? parseFloat(maxPainMatch[1]) : 0,
+      keyLevels: { 
+        support: supportMatch ? parseFloat(supportMatch[1]) : 0, 
+        resistance: resistanceMatch ? parseFloat(resistanceMatch[1]) : 0 
+      }
     },
     strategy: {
-      name: 'Unable to determine',
-      type: 'DEBIT',
-      legs: [],
+      name: strategyNameMatch ? strategyNameMatch[1] : 'Unable to determine',
+      type: strategyTypeMatch ? strategyTypeMatch[1] : 'DEBIT',
+      legs: [], // Too complex to extract with regex
       netPremium: 0,
-      maxProfit: 0,
-      maxLoss: 0,
-      riskReward: '1:1',
-      breakeven: 0,
-      rationale: 'Unable to parse strategy'
+      maxProfit: maxProfitMatch ? parseFloat(maxProfitMatch[1]) : 0,
+      maxLoss: maxLossMatch ? parseFloat(maxLossMatch[1]) : 0,
+      riskReward: riskRewardMatch ? riskRewardMatch[1] : '1:1',
+      breakeven: breakevenMatch ? parseFloat(breakevenMatch[1]) : 0,
+      rationale: rationaleMatch ? rationaleMatch[1] : 'Unable to parse strategy'
     },
     alerts: {
-      warning: { level: 0, description: 'Unable to determine' },
-      abort: { level: 0, description: 'Unable to determine' },
-      profitBooking: { level: 0, description: 'Unable to determine' }
+      warning: { 
+        level: warningLevelMatch ? parseFloat(warningLevelMatch[1]) : 0, 
+        description: warningDescMatch ? warningDescMatch[1] : 'Unable to determine' 
+      },
+      abort: { 
+        level: abortLevelMatch ? parseFloat(abortLevelMatch[1]) : 0, 
+        description: abortDescMatch ? abortDescMatch[1] : 'Unable to determine' 
+      },
+      profitBooking: { 
+        level: profitLevelMatch ? parseFloat(profitLevelMatch[1]) : 0, 
+        description: profitDescMatch ? profitDescMatch[1] : 'Unable to determine' 
+      }
     }
   }
 }
@@ -290,7 +450,7 @@ class GeminiService {
         temperature: 0.3, // Lower for more consistent analysis
         topP: 0.8,
         topK: 40,
-        maxOutputTokens: 4096,
+        maxOutputTokens: 8192, // Increased to prevent truncation
       }
     })
     
@@ -418,15 +578,26 @@ Return your analysis as a single, valid JSON object now:`
         const repaired = repairJson(cleanedText)
         return JSON.parse(repaired)
       } catch (fourthErr) {
-        console.error('All parsing attempts failed')
-        console.error('Response text (first 2000 chars):', cleanedText.substring(0, 2000))
-        
-        // Last resort: extract basic fields
-        try {
-          return extractBasicJson(cleanedText)
-        } catch (fifthErr) {
-          throw new Error(`Failed to parse AI response. The AI may have returned invalid JSON. Error: ${firstErr.message}. Please try analyzing again.`)
-        }
+        console.log('Aggressive repair failed, trying to complete incomplete JSON...')
+      }
+      
+      // Strategy 5: Complete incomplete JSON (handles truncated responses)
+      try {
+        const completed = completeIncompleteJson(cleanedText)
+        return JSON.parse(completed)
+      } catch (fifthErr) {
+        console.log('JSON completion failed, trying extraction...')
+      }
+      
+      // Last resort: extract fields using regex (works even with incomplete JSON)
+      console.warn('All parsing attempts failed, extracting fields from incomplete JSON')
+      console.warn('Response text (first 2000 chars):', cleanedText.substring(0, 2000))
+      console.warn('Full response length:', cleanedText.length)
+      
+      try {
+        return extractBasicJson(cleanedText)
+      } catch (sixthErr) {
+        throw new Error(`Failed to parse AI response. The AI may have returned invalid JSON. Error: ${firstErr.message}. Please try analyzing again.`)
       }
     } catch (error) {
       console.error('Gemini API Error:', error)
