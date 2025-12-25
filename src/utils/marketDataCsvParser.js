@@ -16,11 +16,9 @@ export function parseMarketDataCSV(csvString) {
       throw new Error('CSV must have at least a header row and one data row')
     }
 
-    // Parse header row (remove quotes)
-    const headers = lines[0]
-      .split(',')
-      .map(h => h.trim().replace(/^"|"$/g, ''))
-      .map(h => h.trim())
+    // Parse header row (handle quoted values properly)
+    const headerValues = parseCSVLine(lines[0])
+    const headers = headerValues.map(h => h.trim().replace(/^"|"$/g, '').trim())
 
     // Find column indices
     const dateIndex = headers.findIndex(h => h.toLowerCase().includes('date'))
